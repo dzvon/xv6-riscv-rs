@@ -1,10 +1,7 @@
 use crate::{spinlock::SpinMutex, uart::uart_putc_sync};
 use core::fmt;
-use lazy_static::lazy_static;
 
-lazy_static! {
-    pub static ref CONS: SpinMutex<Console> = SpinMutex::new("cons", Console::default());
-}
+pub static CONS: SpinMutex<Console> = SpinMutex::new("cons", Console::default());
 
 const INPUT_BUF: usize = 128;
 
@@ -15,7 +12,7 @@ pub struct Console {
     pub buf: [u8; INPUT_BUF], // Buffer
 }
 
-impl Default for Console {
+impl const Default for Console {
     fn default() -> Self {
         Console {
             r: 0,

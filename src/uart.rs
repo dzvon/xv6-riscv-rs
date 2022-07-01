@@ -13,11 +13,7 @@ use crate::{
     spinlock::{pop_off, push_off, SpinMutex},
 };
 
-use lazy_static::lazy_static;
-
-lazy_static! {
-    pub static ref UART: SpinMutex<Uart> = SpinMutex::new("uart", Uart::default());
-}
+pub static UART: SpinMutex<Uart> = SpinMutex::new("uart", Uart::default());
 
 const UART_TX_BUF_SIZE: usize = 32;
 
@@ -52,13 +48,22 @@ const LSR_RX_READY: usize = 1 << 0;
 /// THR can accept another character to send
 const LSR_TX_IDLE: u8 = 1 << 5;
 
-#[derive(Default)]
 pub struct Uart {
     buf: [u8; UART_TX_BUF_SIZE],
     // write next to uart_tx_buf[uart_tx_w % UART_TX_BUF_SIZE]
     tx_w: usize,
     // read next from uart_tx_buf[uart_tx_r % UART_TX_BUF_SIZE]
     tx_r: usize,
+}
+
+impl const Default for Uart {
+    fn default() -> Self {
+        Uart {
+            buf: [0; UART_TX_BUF_SIZE],
+            tx_w: 0,
+            tx_r: 0,
+        }
+    }
 }
 
 impl Uart {
