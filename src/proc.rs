@@ -1,9 +1,14 @@
 use crate::{
     file::{File, Inode},
     param::{NCPU, NOFILE, NPROC},
-    spinlock::SpinMutex,
+    println,
+    spinlock::{guard_lock, pop_off, push_off, SpinMutex, SpinMutexGuard},
 };
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::{
+    cell::{Ref, UnsafeCell},
+    ptr,
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+};
 
 use crate::riscv::*;
 use alloc::{
@@ -13,7 +18,7 @@ use alloc::{
 };
 
 pub static CPUS: Cpus = {
-    const CPU: Cpu = Cpu::new();
+    const CPU: UnsafeCell<Cpu> = UnsafeCell::new(Cpu::new());
     Cpus([CPU; NCPU])
 };
 pub static PROCS: ProcList = {
@@ -24,7 +29,11 @@ pub static PROCS: ProcList = {
     }
 };
 
-pub struct Cpus([Cpu; NCPU]);
+extern "C" {
+    fn swtch(old: *const Context, new: *mut Context);
+}
+
+pub struct Cpus([UnsafeCell<Cpu>; NCPU]);
 unsafe impl Sync for Cpus {}
 
 pub struct ProcList {
@@ -36,28 +45,148 @@ pub struct ProcList {
     // must be acquired before any p->lock.
     wait_lock: SpinMutex<()>,
 }
-unsafe impl Sync for ProcList {}
+// unsafe impl Sync for ProcList {}
 
 impl ProcList {
     pub fn alloc_pid() -> usize {
         static NEXT_PID: AtomicUsize = AtomicUsize::new(1);
         NEXT_PID.fetch_add(1, Ordering::Relaxed)
     }
+
+    /// Wake up all processes sleeping on chan.
+    /// Must be called without any p->lock.
+    pub fn wakeup(&self, chan: usize) {
+        for proc in &self.list {
+            let myproc = CPUS.myproc();
+
+            match myproc {
+                Some(myproc) => {
+                    if !ptr::eq(Arc::as_ptr(myproc), proc) {
+                        let mut p = proc.control.lock();
+                        if p.state == ProcState::Sleeping {
+                            if let Some(proc_chan) = p.chan {
+                                if proc_chan == chan {
+                                    p.state = ProcState::Runnable;
+                                }
+                            }
+                        }
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+
+    /// Atomically release lock and sleep on chan.
+    /// Reacquires lock when awakened.
+    pub fn sleep<T>(&self, chan: usize, lock: &SpinMutexGuard<T>) {
+        match CPUS.myproc() {
+            Some(p) => {
+                // Must acquire p->lock in order to
+                // change p->state and then call sched.
+                // Once we hold p->lock, we can be
+                // guaranteed that we won't miss any wakeup
+                // (wakeup locks p->lock),
+                // so it's okay to release lk.
+                let mut proc_ctrl = p.control.lock();
+                let mutex = guard_lock(lock);
+                unsafe {
+                    mutex.force_unlock();
+                }
+
+                // Go to sleep.
+                proc_ctrl.chan = Some(chan);
+                proc_ctrl.state = ProcState::Sleeping;
+
+                ProcList::sched(&proc_ctrl);
+
+                // Tidy up.
+                proc_ctrl.chan = None;
+
+                // Reacquire original lock.
+                drop(proc_ctrl);
+                core::mem::forget(mutex.lock());
+            }
+            None => {}
+        }
+    }
+
+    /// Switch to scheduler.  Must hold only p->lock
+    /// and have changed proc->state. Saves and restores
+    /// intena because intena is a property of this
+    /// kernel thread, not this CPU. It should
+    /// be proc->intena and proc->noff, but that would
+    /// break in the few places where a lock is held but
+    /// there's no process.
+    pub fn sched(proc: &SpinMutexGuard<ProcControl>) {
+        let myproc = CPUS.myproc();
+
+        if let Some(myproc) = myproc {
+            if !myproc.control.holding() {
+                panic!("sched: not holding p->lock");
+            }
+            if CPUS.mycpu().noff != 1 {
+                panic!("sched: cpus.mycpu.noff != 1");
+            }
+            if proc.state == ProcState::Running {
+                panic!("sched: proc is running");
+            }
+            if intr_get() {
+                panic!("sched: interrupts are enabled");
+            }
+
+            let intena = CPUS.mycpu().intena;
+            unsafe {
+                swtch(
+                    ptr::addr_of!(myproc.context),
+                    ptr::addr_of_mut!(CPUS.mycpu().context),
+                );
+            }
+            CPUS.mycpu().intena = intena;
+        }
+    }
+
+    /// Print a process listing to console.  For debugging.
+    /// Runs when user types ^P on console.
+    /// No lock to avoid wedging a stuck machine further.
+    pub fn proc_dump(&self) {
+        for p in &self.list {
+            let (pid, state) = {
+                let proc = p.control.lock();
+                (proc.pid, proc.state)
+            };
+            if matches!(state, ProcState::Unused) {
+                continue;
+            }
+            println!("{} {:8?} {}", pid, state, p.name);
+        }
+    }
 }
 
 impl Cpus {
-    pub fn mycpu(&self) -> &Cpu {
+    /// Return this CPU's mutable reference.
+    /// Interrupts must be disabled.
+    ///
+    /// # Safety
+    ///
+    /// Interrupts must be disabled when calling this function.
+    /// We should make sure that only one CPU can access the corresponding
+    /// CPUS[CPUS] element at a time, so there is no data race.
+    pub fn mycpu(&self) -> &mut Cpu {
         let id = cpuid();
-        &self.0[id]
+        unsafe { &mut *self.0[id].get() }
     }
 
-    pub fn a(&self) -> i32 {
-        let b = 123;
-        return b;
+    pub fn myproc(&self) -> Option<&Arc<Proc>> {
+        push_off();
+        let p = self.mycpu().proc.as_ref();
+        pop_off();
+        return p;
     }
 }
 
 /// Saved registers for kernel context switches.
+#[repr(C)]
 pub struct Context {
     pub ra: usize,
     pub sp: usize,
@@ -103,8 +232,8 @@ impl Context {
 pub struct Cpu {
     pub proc: Option<Arc<Proc>>, // The process running on this cpu, or null.
     pub context: Context,        // swtch() here to enter scheduler().
-    pub noff: AtomicUsize,       // Depth of push_off() nesting.
-    pub intena: AtomicBool,      // Were interrupts enabled before push_off()?
+    pub noff: usize,             // Depth of push_off() nesting.
+    pub intena: bool,            // Were interrupts enabled before push_off()?
 }
 
 impl Cpu {
@@ -112,8 +241,8 @@ impl Cpu {
         Cpu {
             proc: None,
             context: Context::default(),
-            noff: AtomicUsize::new(0),
-            intena: AtomicBool::new(false),
+            noff: 0,
+            intena: false,
         }
     }
 }
@@ -161,7 +290,7 @@ impl const Default for Proc {
     }
 }
 
-struct ProcControl {
+pub struct ProcControl {
     state: ProcState,    // Process state
     chan: Option<usize>, // If non-none, sleeping on channel chan.
     killed: bool,        // Has the process been killed?
@@ -181,6 +310,7 @@ impl const Default for ProcControl {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum ProcState {
     Unused,
     Used,

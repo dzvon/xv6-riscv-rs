@@ -77,7 +77,8 @@ impl<T: ?Sized> SpinMutex<T> {
             .locked
             .compare_exchange(
                 ptr::null_mut(),
-                ptr::addr_of!(*CPUS.mycpu()) as *mut _,
+                // SAFETY: push_off() disables interrupts, so this is safe.
+                unsafe { CPUS.mycpu() as *mut Cpu },
                 Ordering::Acquire,
                 Ordering::Relaxed,
             )
@@ -92,10 +93,25 @@ impl<T: ?Sized> SpinMutex<T> {
     }
 
     pub fn holding(&self) -> bool {
-        let a = self.locked.load(Ordering::Relaxed) as usize;
-        let b = CPUS.mycpu() as *const _ as usize;
-        a == b
+        // SAFETY: This function is only called from the lock() function, which
+        // disables interrupts.
+        self.locked.load(Ordering::Relaxed) == unsafe { CPUS.mycpu() as *mut Cpu }
     }
+
+    /// Force unlock this [`SpinMutex`].
+    ///
+    /// # Safety
+    ///
+    /// This is *extremely* unsafe if the lock is not held by the current
+    /// thread. However, this can be useful in some instances for exposing the
+    /// lock to FFI that doesn't know how to deal with RAII.
+    pub unsafe fn force_unlock(&self) {
+        self.locked.store(ptr::null_mut(), Ordering::Release)
+    }
+}
+
+pub fn guard_lock<'a, T: ?Sized>(guard: &SpinMutexGuard<'a, T>) -> &'a SpinMutex<T> {
+    guard.lock
 }
 
 // push_off/pop_off are like intr_off()/intr_on() except that they are matched:
@@ -106,23 +122,35 @@ pub fn push_off() {
 
     intr_off();
 
-    let mycpu = CPUS.mycpu();
-    if mycpu.noff.fetch_add(1, Ordering::Relaxed) == 0 {
-        mycpu.intena.store(old, Ordering::Relaxed);
+    // SAFETY: We are disabling interrupts, so we can't be holding the lock.
+    unsafe {
+        let mycpu = CPUS.mycpu();
+
+        if mycpu.noff == 0 {
+            mycpu.intena = old;
+        }
+
+        mycpu.noff += 1;
     }
 }
 
 pub fn pop_off() {
-    let mycpu = CPUS.mycpu();
     if intr_get() {
         panic!("pop_off() called with interrupts enabled");
     }
 
-    if mycpu.noff.fetch_sub(1, Ordering::Relaxed) < 1 {
-        panic!("pop_off() called too many times");
-    }
+    // SAFETY: We are ensuring that the interrupts are disabled here.
+    unsafe {
+        let mycpu = CPUS.mycpu();
 
-    if mycpu.noff.load(Ordering::Relaxed) == 0 && mycpu.intena.load(Ordering::Relaxed) {
-        intr_on();
+        if mycpu.noff < 1 {
+            panic!("pop_off() called too many times");
+        }
+
+        mycpu.noff -= 1;
+
+        if mycpu.noff == 0 && mycpu.intena {
+            intr_on();
+        }
     }
 }

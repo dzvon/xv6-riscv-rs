@@ -49,13 +49,17 @@ pub extern "C" fn main() -> ! {
 
         println!("Hello, world!");
         trap_init_hart();
-        STARTED.store(true, Ordering::Relaxed);
+        STARTED.store(true, Ordering::Release);
     } else {
-        while !STARTED.load(Ordering::Relaxed) {
+        while !STARTED.load(Ordering::Acquire) {
             core::hint::spin_loop();
         }
         println!("Hart {} starting!", cpuid());
     }
 
-    loop {}
+    riscv::intr_on();
+
+    loop {
+        core::hint::spin_loop();
+    }
 }

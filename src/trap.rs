@@ -3,6 +3,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use crate::{
     memlayout::{UART0_IRQ, VIRTIO0_IRQ},
     plic::{plic_claim, plic_complete},
+    print,
     proc::cpuid,
     riscv::*,
     uart::uart_intr,
@@ -101,6 +102,7 @@ fn devintr() -> Trap {
 fn clock_intr() {
     // increment the number of ticks.
     TICKS.fetch_add(1, Ordering::Relaxed);
+    print!(".");
 }
 
 pub enum Trap {

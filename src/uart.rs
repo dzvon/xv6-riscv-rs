@@ -4,9 +4,13 @@
 /// some have different meanings for
 /// read vs write.
 /// see http://byterunner.com/16550.html
-use core::sync::atomic::Ordering;
+use core::{
+    ptr,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use crate::{
+    console::console_intr,
     memlayout::UART0,
     printf::PANICKED,
     proc::PROCS,
@@ -49,11 +53,11 @@ const LSR_RX_READY: usize = 1 << 0;
 const LSR_TX_IDLE: u8 = 1 << 5;
 
 pub struct Uart {
-    buf: [u8; UART_TX_BUF_SIZE],
+    pub buf: [u8; UART_TX_BUF_SIZE],
     // write next to uart_tx_buf[uart_tx_w % UART_TX_BUF_SIZE]
-    tx_w: usize,
+    pub tx_w: usize,
     // read next from uart_tx_buf[uart_tx_r % UART_TX_BUF_SIZE]
-    tx_r: usize,
+    pub tx_r: usize,
 }
 
 impl const Default for Uart {
@@ -66,7 +70,7 @@ impl const Default for Uart {
     }
 }
 
-impl Uart {
+impl SpinMutex<Uart> {
     /// add a character to the output buffer and tell the
     /// UART to start sending if it isn't already.
     /// blocks if the output buffer is full.
@@ -74,25 +78,31 @@ impl Uart {
     /// from interrupts; it's only suitable for use
     /// by write().
     pub fn uart_putc(&mut self, c: u8) {
+        let mut lock = self.lock();
+
         if PANICKED.load(Ordering::Relaxed) {
             loop {}
         }
 
         loop {
-            if self.tx_w - self.tx_r == UART_TX_BUF_SIZE {
+            if lock.tx_w - lock.tx_r == UART_TX_BUF_SIZE {
                 // buffer is full.
                 // wait for uart_start() to open up space in the buffer.
 
-                // PROCS::current().sleep();
+                PROCS.sleep(ptr::addr_of!(lock.tx_r) as usize, &lock);
             } else {
-                self.buf[self.tx_w % UART_TX_BUF_SIZE] = c;
-                self.tx_w += 1;
-                self.uart_start();
+                let i = lock.tx_w % UART_TX_BUF_SIZE;
+                lock.buf[i] = c;
+                lock.tx_w += 1;
+                lock.uart_start();
+                drop(lock);
                 break;
             }
         }
     }
+}
 
+impl Uart {
     /// if the UART is idle, and a character is waiting
     /// in the transmit buffer, send it.
     /// caller must hold uart_tx_lock.
@@ -115,21 +125,21 @@ impl Uart {
             self.tx_r += 1;
 
             // maybe uartputc() is waiting for space in the buffer.
-            // TODO: wakeup(&uart_tx_r);
+            PROCS.wakeup(ptr::addr_of!(self.tx_r) as usize);
 
             write_reg(THR, c);
         }
     }
+}
 
-    // read one input character from the UART.
-    // return -1 if none is waiting.
-    pub fn uart_getc() -> Option<u8> {
-        if (read_reg(LSR) & 0x01) != 0 {
-            // input data is ready.
-            Some(read_reg(RHR))
-        } else {
-            None
-        }
+/// read one input character from the UART.
+/// return None if none is waiting.
+pub fn uart_getc() -> Option<u8> {
+    if (read_reg(LSR) & 0x01) != 0 {
+        // input data is ready.
+        Some(read_reg(RHR))
+    } else {
+        None
     }
 }
 
@@ -155,15 +165,18 @@ pub fn uart_putc_sync(c: u8) {
 
 /// handle a uart interrupt, raised because input has
 /// arrived, or the uart is ready for more output, or
-/// both. called from trap.c.
+/// both. called from trap.rs.
 pub fn uart_intr() {
     // read and process incoming characters.
     loop {
-        let c = Uart::uart_getc();
-        if c.is_none() {
-            break;
+        match uart_getc() {
+            Some(c) => {
+                console_intr(c);
+            }
+            None => {
+                break;
+            }
         }
-        // TODO: console_intr(c);
     }
 
     // send buffered characters.

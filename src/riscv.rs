@@ -66,7 +66,7 @@ pub(crate) fn w_sstatus(sstatus: usize) {
     }
 }
 
-// Supervisor Interrupt Pending
+/// Supervisor Interrupt Pending
 #[inline(always)]
 pub(crate) fn r_sip() -> usize {
     let mut sip: usize;
