@@ -77,8 +77,7 @@ impl<T: ?Sized> SpinMutex<T> {
             .locked
             .compare_exchange(
                 ptr::null_mut(),
-                // SAFETY: push_off() disables interrupts, so this is safe.
-                unsafe { CPUS.mycpu() as *mut Cpu },
+                CPUS.mycpu(),
                 Ordering::Acquire,
                 Ordering::Relaxed,
             )
@@ -93,9 +92,7 @@ impl<T: ?Sized> SpinMutex<T> {
     }
 
     pub fn holding(&self) -> bool {
-        // SAFETY: This function is only called from the lock() function, which
-        // disables interrupts.
-        self.locked.load(Ordering::Relaxed) == unsafe { CPUS.mycpu() as *mut Cpu }
+        ptr::eq(self.locked.load(Ordering::Relaxed), CPUS.mycpu())
     }
 
     /// Force unlock this [`SpinMutex`].
@@ -107,6 +104,15 @@ impl<T: ?Sized> SpinMutex<T> {
     /// lock to FFI that doesn't know how to deal with RAII.
     pub unsafe fn force_unlock(&self) {
         self.locked.store(ptr::null_mut(), Ordering::Release)
+    }
+
+    /// Returns a mutable pointer to the underlying data.
+    ///
+    /// This is mostly meant to be used for applications which require manual unlocking, but where
+    /// storing both the lock and the pointer to the inner data gets inefficient.
+    #[inline]
+    pub fn as_mut_ptr(&self) -> *mut T {
+        self.data.get()
     }
 }
 

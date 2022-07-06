@@ -14,3 +14,7 @@ panic = "abort"
 [profile.release]
 panic = "abort"
 strip = "debuginfo"
+
+[dependencies]
+bitflags = "1.3.2"
+once_cell = { version = "1.12.0", default-features = false }

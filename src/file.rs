@@ -1,6 +1,19 @@
-use crate::param::NDEV;
+use crate::{
+    console::{console_read, console_write},
+    param::NDEV,
+};
 
-pub static DEV_SW: [Option<DevSW>; NDEV] = [None; NDEV];
+pub static DEV_SW: [Option<DevSW>; NDEV] = {
+    let mut sw = [None; NDEV];
+
+    // connect read and write system calls
+    // to the console_read and console_write functions.
+    sw[CONSOLE] = Some(DevSW {
+        read: console_read,
+        write: console_write,
+    });
+    sw
+};
 
 pub const CONSOLE: usize = 1;
 

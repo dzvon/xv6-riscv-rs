@@ -5,6 +5,7 @@
 #![feature(const_default_impls)]
 #![feature(const_trait_impl)]
 #![feature(const_weak_new)]
+#![feature(sync_unsafe_cell)]
 
 #[cfg(not(target_os = "none"))]
 compile_error!("You are not using a cross-compiler, you will most certainly run into trouble");
@@ -33,10 +34,12 @@ mod spinlock;
 mod start;
 mod trap;
 mod uart;
+mod vm;
 
 global_asm!(include_str!("asm/entry.S"));
 global_asm!(include_str!("asm/kernelvec.S"));
 global_asm!(include_str!("asm/trampoline.S"));
+global_asm!(include_str!("asm/swtch.S"));
 
 static STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -44,10 +47,10 @@ static STARTED: AtomicBool = AtomicBool::new(false);
 #[no_mangle]
 pub extern "C" fn main() -> ! {
     if cpuid() == 0 {
-        kalloc::kinit();
         uart::uart_init();
-
-        println!("Hello, world!");
+        println!("xv6-rs kernel is booting");
+        kalloc::kinit(); // physical page allocator
+        vm::kvminit(); // create kernel page table
         trap_init_hart();
         STARTED.store(true, Ordering::Release);
     } else {

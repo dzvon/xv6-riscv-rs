@@ -367,3 +367,29 @@ pub(crate) fn sfence_vma() {
         asm!("sfence.vma zero, zero");
     }
 }
+
+pub const PGSIZE: u64 = 4096; // bytes per page
+pub const PGSHIFT: u64 = 12; // bits of offset within a page
+
+pub const fn pg_round_up(addr: u64) -> u64 {
+    (addr + PGSIZE - 1) & !(PGSIZE - 1)
+}
+pub const fn pg_round_down(addr: u64) -> u64 {
+    addr & !(PGSIZE - 1)
+}
+
+// shift a physical address to the right place for a PTE.
+pub const fn pa2pte(pa: u64) -> u64 {
+    (pa >> PGSHIFT) << 10
+}
+pub const fn pte2pa(pte: u64) -> u64 {
+    (pte >> 10) << PGSHIFT
+}
+
+// extract the three 9-bit page table indices from a virtual address.
+pub const PXMASK: u64 = 0x1ff; // 9-bit mask for page table index.
+pub const fn pg_index(level: u8, addr: u64) -> u64 {
+    (addr >> (PGSHIFT + (level * 9) as u64)) & PXMASK
+}
+
+pub const MAXVA: u64 = 1 << (9 + 9 + 9 + 12 - 1);

@@ -8,7 +8,12 @@
 //!   control-d -- end of file
 //!   control-p -- print process list
 
-use crate::{proc::PROCS, spinlock::SpinMutex, uart::uart_putc_sync};
+use crate::{
+    file::DEV_SW,
+    proc::PROCS,
+    spinlock::SpinMutex,
+    uart::{self, uart_putc_sync},
+};
 use core::{fmt, ptr};
 
 pub static CONS: SpinMutex<Console> = SpinMutex::new("cons", Console::default());
@@ -34,17 +39,6 @@ impl const Default for Console {
         }
     }
 }
-
-impl fmt::Write for Console {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        for b in s.bytes() {
-            uart_putc_sync(b);
-        }
-        Ok(())
-    }
-}
-
-pub fn console_init() {}
 
 const fn ctrl(b: u8) -> u8 {
     b - b'@'
@@ -101,7 +95,7 @@ pub fn console_intr(c: u8) {
 /// send one character to the uart.
 /// called by printf, and to echo input characters,
 /// but not from write().
-fn cons_putc(c: u8) {
+pub fn cons_putc(c: u8) {
     if c == BACKSPACE {
         // if the user typed backspace, overwrite with a space.
         uart_putc_sync(b'\x08');
@@ -113,8 +107,16 @@ fn cons_putc(c: u8) {
 }
 
 /// user write()s to the console go here.
-pub fn console_write(user_src: i32, src: u64, n: i32) -> i32 {
-    let mut i = 0;
+pub(crate) fn console_write(user_src: i32, src: u64, n: i32) -> i32 {
+    // TODO: implement
+    0
+}
 
-    i
+/// user read()s from the console go here.
+/// copy (up to) a whole input line to dst.
+/// user_dist indicates whether dst is a user
+/// or kernel address.
+pub(crate) fn console_read(user_dst: i32, dst: u64, n: i32) -> i32 {
+    // TODO: implement
+    0
 }

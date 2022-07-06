@@ -181,7 +181,7 @@ impl Cpus {
         push_off();
         let p = self.mycpu().proc.as_ref();
         pop_off();
-        return p;
+        p
     }
 }
 

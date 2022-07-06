@@ -6,4 +6,3 @@ target = "riscv64gc-unknown-none-elf"
 
 [target.riscv64gc-unknown-none-elf]
 rustflags = ["-C", "link-args=-Tlinker.ld -z max-page-size=4096"]
-# linker = "riscv64-linux-gnu-ld"

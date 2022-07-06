@@ -4,10 +4,7 @@
 /// some have different meanings for
 /// read vs write.
 /// see http://byterunner.com/16550.html
-use core::{
-    ptr,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use core::{ptr, sync::atomic::Ordering};
 
 use crate::{
     console::console_intr,
@@ -168,15 +165,8 @@ pub fn uart_putc_sync(c: u8) {
 /// both. called from trap.rs.
 pub fn uart_intr() {
     // read and process incoming characters.
-    loop {
-        match uart_getc() {
-            Some(c) => {
-                console_intr(c);
-            }
-            None => {
-                break;
-            }
-        }
+    while let Some(c) = uart_getc() {
+        console_intr(c);
     }
 
     // send buffered characters.

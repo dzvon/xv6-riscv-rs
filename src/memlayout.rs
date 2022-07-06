@@ -17,6 +17,8 @@
 // end -- start of kernel page allocation area
 // PHYSTOP -- end RAM used by the kernel
 
+use crate::riscv::{MAXVA, PGSIZE};
+
 // qemu puts UART registers here in physical memory.
 pub const UART0: u64 = 0x10000000;
 pub const UART0_IRQ: u32 = 10;
@@ -61,3 +63,7 @@ pub const fn plic_sclaim(hart: usize) -> u64 {
 // from physical address 0x80000000 to PHYSTOP.
 pub(crate) const KERNBASE: u64 = 0x80000000;
 pub(crate) const PHYSTOP: u64 = KERNBASE + 128 * 1024 * 1024;
+
+// map the trampoline page to the highest address,
+// in both user and kernel space.
+pub(crate) const TRAMPOLINE: u64 = MAXVA - PGSIZE;
