@@ -1,11 +1,13 @@
 use crate::{
     file::{File, Inode},
+    memlayout::{kstack, TRAMPOLINE},
     param::{NCPU, NOFILE, NPROC},
     println,
     spinlock::{guard_lock, pop_off, push_off, SpinMutex, SpinMutexGuard},
+    vm::{kvmmap, PageTable, PageTableEntryFlags, PhysAddr, VirtAddr},
 };
 use core::{
-    cell::{Ref, UnsafeCell},
+    cell::{Ref, RefCell, UnsafeCell},
     ptr,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
@@ -23,11 +25,19 @@ pub static CPUS: Cpus = {
 };
 pub static PROCS: ProcList = {
     const PROC: Proc = Proc::default();
+
     ProcList {
         list: [PROC; NPROC],
         wait_lock: SpinMutex::new("wait_lock", ()),
     }
 };
+
+/// initialize the proc table at boot time.
+pub fn proc_init() {
+    for (i, proc) in PROCS.list.iter().enumerate() {
+        proc.inner.borrow_mut().kstack = kstack(i);
+    }
+}
 
 extern "C" {
     fn swtch(old: *const Context, new: *mut Context);
@@ -45,7 +55,7 @@ pub struct ProcList {
     // must be acquired before any p->lock.
     wait_lock: SpinMutex<()>,
 }
-// unsafe impl Sync for ProcList {}
+unsafe impl Sync for ProcList {}
 
 impl ProcList {
     pub fn alloc_pid() -> usize {
@@ -138,7 +148,7 @@ impl ProcList {
             let intena = CPUS.mycpu().intena;
             unsafe {
                 swtch(
-                    ptr::addr_of!(myproc.context),
+                    ptr::addr_of!(myproc.inner.borrow().context),
                     ptr::addr_of_mut!(CPUS.mycpu().context),
                 );
             }
@@ -158,7 +168,7 @@ impl ProcList {
             if matches!(state, ProcState::Unused) {
                 continue;
             }
-            println!("{} {:8?} {}", pid, state, p.name);
+            println!("{} {:8?} {}", pid, state, p.inner.borrow().name);
         }
     }
 }
@@ -261,7 +271,11 @@ pub struct Proc {
     // wait_lock must be held when using this:
     parent: Weak<Proc>, // The parent process
 
-    // these are private to the process, so lock need not be held.
+    inner: RefCell<ProcInner>,
+}
+
+/// these are private to the process, so lock need not be held.
+struct ProcInner {
     kstack: u64,                       // Virtual address of kernel stack
     sz: u64,                           // Size of process memory (bytes)
     pagetable: usize,                  // User-level page table
@@ -278,14 +292,16 @@ impl const Default for Proc {
         Proc {
             control: SpinMutex::new("proc", ProcControl::default()),
             parent: Weak::new(),
-            kstack: 0,
-            sz: 0,
-            pagetable: 0,
-            trapframe: None,
-            context: Context::default(),
-            file: [FILE; NOFILE],
-            cwd: None,
-            name: String::new(),
+            inner: RefCell::new(ProcInner {
+                kstack: 0,
+                sz: 0,
+                pagetable: 0,
+                trapframe: None,
+                context: Context::default(),
+                file: [FILE; NOFILE],
+                cwd: None,
+                name: String::new(),
+            }),
         }
     }
 }
@@ -371,4 +387,28 @@ struct TrapFrame {
     t4: u64,
     t5: u64,
     t6: u64,
+}
+
+/// Allocate a page for each process's kernel stack.
+/// Map it high in memory, followed by an invalid
+/// guard page.
+pub fn proc_mapstacks(kpgtbl: &mut PageTable) {
+    for i in 0..NPROC {
+        let ptr = unsafe {
+            alloc::alloc::alloc_zeroed(alloc::alloc::Layout::array::<u8>(PGSIZE as usize).unwrap())
+        };
+
+        if ptr.is_null() {
+            panic!("proc_mapstacks: out of memory");
+        }
+
+        let va = kstack(i);
+        kvmmap(
+            kpgtbl,
+            VirtAddr::new(va),
+            PhysAddr::new(ptr as u64),
+            PGSIZE,
+            PageTableEntryFlags::READABLE | PageTableEntryFlags::WRITABLE,
+        );
+    }
 }

@@ -7,7 +7,10 @@ use core::{
 
 use crate::{
     memlayout::{KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, UART0, VIRTIO0},
-    riscv::{pa2pte, pg_index, pg_round_down, pte2pa, MAXVA, PGSIZE},
+    proc::proc_mapstacks,
+    riscv::{
+        make_satp, pa2pte, pg_index, pg_round_down, pte2pa, sfence_vma, w_satp, MAXVA, PGSIZE,
+    },
 };
 
 /// The kernel's page table.
@@ -87,13 +90,16 @@ pub unsafe fn kvmmake() -> NonNull<PageTable> {
         PageTableEntryFlags::READABLE | PageTableEntryFlags::WRITABLE,
     );
 
+    // map kernel stacks
+    proc_mapstacks(page_table);
+
     NonNull::new(page_table).unwrap()
 }
 
 /// add a mapping to the kernel page table.
 /// only used when booting.
 /// does not flush TLB or enable paging.
-fn kvmmap(
+pub fn kvmmap(
     page_table: &mut PageTable,
     va: VirtAddr,
     pa: PhysAddr,
@@ -270,6 +276,11 @@ impl PageTablePtr {
     unsafe fn init(&self, page_table: NonNull<PageTable>) {
         ptr::write(self.0.get(), page_table);
     }
+
+    #[inline]
+    pub fn as_u64(&self) -> u64 {
+        unsafe { (*self.0.get()).as_ptr() as u64 }
+    }
 }
 
 bitflags! {
@@ -333,4 +344,10 @@ impl VirtAddr {
     pub const fn as_u64(&self) -> u64 {
         self.0
     }
+}
+/// Switch h/w page table register to the kernel's page table,
+/// and enable paging.
+pub fn kvminithart() {
+    w_satp(make_satp(KERNEL_PAGE_TABLE.as_u64()));
+    sfence_vma();
 }

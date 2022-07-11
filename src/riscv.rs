@@ -219,16 +219,16 @@ pub(crate) fn w_pmpaddr0(pmpaddr0: usize) {
 }
 
 // use riscv's sv39 page table scheme.
-pub(crate) const SATP_SV39: usize = 8 << 60;
+pub(crate) const SATP_SV39: u64 = 8 << 60;
 
-pub(crate) const fn make_satp(pagetable: usize) -> usize {
+pub(crate) const fn make_satp(pagetable: u64) -> u64 {
     SATP_SV39 | pagetable >> 12
 }
 
 // supervisor address translation and protection;
 // holds the address of the page table.
 #[inline(always)]
-pub(crate) fn w_satp(satp: usize) {
+pub(crate) fn w_satp(satp: u64) {
     unsafe {
         asm!("csrw satp, {}", in(reg) satp);
     }

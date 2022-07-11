@@ -67,3 +67,9 @@ pub(crate) const PHYSTOP: u64 = KERNBASE + 128 * 1024 * 1024;
 // map the trampoline page to the highest address,
 // in both user and kernel space.
 pub(crate) const TRAMPOLINE: u64 = MAXVA - PGSIZE;
+
+// map kernel stacks beneath the trampoline,
+// each surrounded by invalid guard pages.
+pub const fn kstack(hart: usize) -> u64 {
+    TRAMPOLINE - (hart + 1) as u64 * (2 * PGSIZE)
+}

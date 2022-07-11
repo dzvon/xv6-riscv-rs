@@ -5,6 +5,8 @@
 #![feature(const_default_impls)]
 #![feature(const_trait_impl)]
 #![feature(const_weak_new)]
+#![feature(const_intoiterator_identity)]
+#![feature(const_mut_refs)]
 #![feature(sync_unsafe_cell)]
 
 #[cfg(not(target_os = "none"))]
@@ -16,8 +18,6 @@ use core::{
 };
 
 use proc::cpuid;
-
-use crate::trap::trap_init_hart;
 
 extern crate alloc;
 
@@ -51,7 +51,11 @@ pub extern "C" fn main() -> ! {
         println!("xv6-rs kernel is booting");
         kalloc::kinit(); // physical page allocator
         vm::kvminit(); // create kernel page table
-        trap_init_hart();
+        vm::kvminithart(); // turn on paging
+        proc::proc_init(); // process table
+        trap::trap_init_hart(); // install kernel trap vector
+        plic::plic_init(); // set up interrupt controller
+        plic::plic_init_hart(); // ask PLIC for device interrupts
         STARTED.store(true, Ordering::Release);
     } else {
         while !STARTED.load(Ordering::Acquire) {
